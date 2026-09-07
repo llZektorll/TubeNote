@@ -49,6 +49,8 @@ itself beyond what YouTube's own player requires to stream video/audio.
 Found a bug or have a feature request? Please open an issue in this
 repository.
 
+I have converted coffee ☕ into this repository. If you think it was worth it, consider helping me buy more coffee: <a href="https://www.paypal.com/paypalme/llzektorll"> PayPal </a>
+
 ## License
 
 Released under the [MIT License](./LICENSE).
