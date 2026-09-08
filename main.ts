@@ -6,38 +6,31 @@ import {
     Notice
 } from "obsidian";
 
-interface YouTubeLiveSettings {
+import type { SettingDefinitionItem } from "obsidian";
+
+interface TubeNoteSettings {
     youtubeUrl: string;
     volume: number;
 }
 
-const DEFAULT_SETTINGS: YouTubeLiveSettings = {
+const DEFAULT_SETTINGS: TubeNoteSettings = {
     youtubeUrl: "https://www.youtube.com/watch?v=5yx6BWlEVcY",
     volume: 50
 };
 
-declare global {
-    interface Window {
-        YT: any;
-        onYouTubeIframeAPIReady: () => void;
-    }
-}
-
 export default class TubeNotePlugin extends Plugin {
 
-    settings: YouTubeLiveSettings;
-    player: any = null;
+    settings: TubeNoteSettings;
 
     private container: HTMLElement | null = null;
-    private playerContainer: HTMLElement | null = null;
+    private playerFrame: HTMLIFrameElement | null = null;
     private playButton: HTMLButtonElement | null = null;
     private volumeSlider: HTMLInputElement | null = null;
     private statusEl: HTMLElement | null = null;
+    private isPlaying = false;
 
     async onload() {
         await this.loadSettings();
-
-        await this.loadYouTubeAPI();
 
         this.addSettingTab(
             new TubeNoteSettingTab(this.app, this)
@@ -56,63 +49,24 @@ export default class TubeNotePlugin extends Plugin {
 
     onunload() {
         this.container?.remove();
-
-        if (this.player) {
-            try {
-                this.player.destroy();
-            } catch (_) {}
-        }
+        this.container = null;
+        this.playerFrame = null;
     }
 
     async loadSettings() {
+        const savedData =
+            (await this.loadData()) as
+                Partial<TubeNoteSettings> | null;
+
         this.settings = Object.assign(
             {},
             DEFAULT_SETTINGS,
-            await this.loadData()
+            savedData
         );
     }
 
     async saveSettings() {
         await this.saveData(this.settings);
-    }
-
-    private async loadYouTubeAPI(): Promise<void> {
-        if (window.YT?.Player) {
-            return;
-        }
-
-        await new Promise<void>((resolve) => {
-
-            const existing = document.querySelector(
-                'script[src="https://www.youtube.com/iframe_api"]'
-            );
-
-            if (existing) {
-                const check = setInterval(() => {
-                    if (window.YT?.Player) {
-                        clearInterval(check);
-                        resolve();
-                    }
-                }, 100);
-
-                return;
-            }
-
-            const script = document.createElement("script");
-
-            script.src =
-                "https://www.youtube.com/iframe_api";
-
-            document.head.appendChild(script);
-
-            const previous =
-                window.onYouTubeIframeAPIReady;
-
-            window.onYouTubeIframeAPIReady = () => {
-                previous?.();
-                resolve();
-            };
-        });
     }
 
     private createController() {
@@ -130,7 +84,7 @@ export default class TubeNotePlugin extends Plugin {
 
         this.container =
             navHeader.parentElement?.insertBefore(
-                document.createElement("div"),
+                createDiv({ cls: "tubenote-controller" }),
                 navHeader
             ) ?? null;
 
@@ -138,19 +92,15 @@ export default class TubeNotePlugin extends Plugin {
             return;
         }
 
-        this.container.addClass(
-            "youtube-live-controller"
-        );
-
         const controls =
             this.container.createDiv(
-                "youtube-live-controls"
+                { cls: "tubenote-controls" }
             );
 
         // Play / Pause
         this.playButton =
             controls.createEl("button", {
-                cls: "youtube-live-play",
+                cls: "tubenote-play",
                 text: "▶"
             });
 
@@ -159,7 +109,8 @@ export default class TubeNotePlugin extends Plugin {
             "Play livestream"
         );
 
-        this.playButton.addEventListener(
+        this.registerDomEvent(
+            this.playButton,
             "click",
             () => this.togglePlayback()
         );
@@ -167,22 +118,21 @@ export default class TubeNotePlugin extends Plugin {
         // Status
         this.statusEl =
             controls.createDiv(
-                "youtube-live-status"
+                { cls: "tubenote-status" }
             );
 
-        this.statusEl.setText("YouTube Live");
+        this.statusEl.setText("Ready");
 
         // Volume icon
-        const volumeIcon =
-            controls.createSpan({
-                cls: "youtube-live-volume-icon",
-                text: "🔊"
-            });
+        controls.createSpan({
+            cls: "tubenote-volume-icon",
+            text: "🔊"
+        });
 
         // Volume
         this.volumeSlider =
             controls.createEl("input", {
-                cls: "youtube-live-volume",
+                cls: "tubenote-volume",
                 attr: {
                     type: "range",
                     min: "0",
@@ -191,35 +141,33 @@ export default class TubeNotePlugin extends Plugin {
                 }
             });
 
-        this.volumeSlider.addEventListener(
+        this.registerDomEvent(
+            this.volumeSlider,
             "input",
             () => {
                 const volume =
                     Number(this.volumeSlider?.value ?? 50);
 
                 this.settings.volume = volume;
+                this.setPlayerVolume(volume);
 
-                if (this.player) {
-                    this.player.setVolume(volume);
-                }
-
-                this.saveSettings();
+                void this.saveSettings();
             }
         );
 
-        // Hidden player
-        this.playerContainer =
+        // Player
+        const playerContainer =
             this.container.createDiv(
-                "youtube-live-player"
+                { cls: "tubenote-player" }
             );
 
-        this.createPlayer();
+        this.createPlayer(playerContainer);
     }
 
     private ensureController() {
         if (
             !document.querySelector(
-                ".youtube-live-controller"
+                ".tubenote-controller"
             )
         ) {
             this.container = null;
@@ -227,11 +175,7 @@ export default class TubeNotePlugin extends Plugin {
         }
     }
 
-    private createPlayer() {
-
-        if (!this.playerContainer) {
-            return;
-        }
+    private createPlayer(playerContainer: HTMLElement) {
 
         const videoId =
             this.extractVideoId(
@@ -245,87 +189,63 @@ export default class TubeNotePlugin extends Plugin {
             return;
         }
 
-        this.player =
-            new window.YT.Player(
-                this.playerContainer,
-                {
-                    videoId,
+        playerContainer.empty();
 
-                    playerVars: {
-                        autoplay: 0,
-                        controls: 0,
-                        modestbranding: 1,
-                        rel: 0,
-                        playsinline: 1
-                    },
-
-                    events: {
-                        onReady: (event: any) => {
-                            event.target.setVolume(
-                                this.settings.volume
-                            );
-
-                            this.statusEl?.setText(
-                                "YouTube Live"
-                            );
-                        },
-
-                        onStateChange: (event: any) => {
-
-                            if (
-                                event.data ===
-                                window.YT.PlayerState.PLAYING
-                            ) {
-                                this.updatePlayButton(true);
-
-                                this.statusEl?.setText(
-                                    "Live"
-                                );
-                            }
-
-                            if (
-                                event.data ===
-                                window.YT.PlayerState.PAUSED
-                            ) {
-                                this.updatePlayButton(false);
-
-                                this.statusEl?.setText(
-                                    "Paused"
-                                );
-                            }
-
-                            if (
-                                event.data ===
-                                window.YT.PlayerState.ENDED
-                            ) {
-                                this.updatePlayButton(false);
-                            }
-                        }
-                    }
+        // Embeds YouTube's own player iframe directly. Playback is
+        // controlled via postMessage to the embed (YouTube's documented
+        // "Listening" postMessage protocol), so no external script is
+        // ever injected by this plugin.
+        this.playerFrame =
+            playerContainer.createEl("iframe", {
+                attr: {
+                    src:
+                        `https://www.youtube.com/embed/${videoId}` +
+                        "?enablejsapi=1&autoplay=0&controls=0" +
+                        "&modestbranding=1&rel=0&playsinline=1",
+                    allow: "encrypted-media",
+                    frameborder: "0"
                 }
-            );
+            });
+
+        this.isPlaying = false;
+        this.updatePlayButton(false);
+        this.statusEl?.setText("Ready");
     }
 
     private togglePlayback() {
 
-        if (!this.player) {
+        if (!this.playerFrame) {
             new Notice(
                 "YouTube player is not ready."
             );
             return;
         }
 
-        const state =
-            this.player.getPlayerState();
-
-        if (
-            state ===
-            window.YT.PlayerState.PLAYING
-        ) {
-            this.player.pauseVideo();
+        if (this.isPlaying) {
+            this.postPlayerCommand("pauseVideo");
+            this.statusEl?.setText("Paused");
         } else {
-            this.player.playVideo();
+            this.postPlayerCommand("playVideo");
+            this.setPlayerVolume(this.settings.volume);
+            this.statusEl?.setText("Live");
         }
+
+        this.isPlaying = !this.isPlaying;
+        this.updatePlayButton(this.isPlaying);
+    }
+
+    private setPlayerVolume(volume: number) {
+        this.postPlayerCommand("setVolume", [volume]);
+    }
+
+    private postPlayerCommand(
+        func: string,
+        args: unknown[] = []
+    ) {
+        this.playerFrame?.contentWindow?.postMessage(
+            JSON.stringify({ event: "command", func, args }),
+            "https://www.youtube.com"
+        );
     }
 
     private updatePlayButton(playing: boolean) {
@@ -370,26 +290,23 @@ export default class TubeNotePlugin extends Plugin {
                 return parsed.pathname.substring(1);
             }
 
-        } catch (_) {}
+        } catch {
+            // Not a valid URL: fall through and report it upstream.
+        }
 
         return null;
     }
 
-    async updateYouTubeUrl() {
+    updateYouTubeUrl() {
 
-        if (this.player) {
-            try {
-                this.player.destroy();
-            } catch (_) {}
+        const playerContainer =
+            this.container?.querySelector<HTMLElement>(
+                ".tubenote-player"
+            );
+
+        if (playerContainer) {
+            this.createPlayer(playerContainer);
         }
-
-        this.player = null;
-
-        if (this.playerContainer) {
-            this.playerContainer.empty();
-        }
-
-        this.createPlayer();
     }
 }
 
@@ -406,6 +323,73 @@ class TubeNoteSettingTab
         this.plugin = plugin;
     }
 
+    getSettingDefinitions(): SettingDefinitionItem[] {
+        return [
+            {
+                name: "YouTube livestream URL",
+                desc: "Enter the URL of the YouTube livestream.",
+                control: {
+                    type: "text",
+                    key: "youtubeUrl",
+                    placeholder:
+                        "Paste a YouTube livestream link",
+                    defaultValue:
+                        DEFAULT_SETTINGS.youtubeUrl
+                }
+            },
+            {
+                name: "Default volume",
+                desc: "Volume used when the livestream starts.",
+                control: {
+                    type: "slider",
+                    key: "volume",
+                    min: 0,
+                    max: 100,
+                    step: 1,
+                    defaultValue:
+                        DEFAULT_SETTINGS.volume
+                }
+            }
+        ];
+    }
+
+    getControlValue(key: string): unknown {
+        if (key === "youtubeUrl") {
+            return this.plugin.settings.youtubeUrl;
+        }
+
+        if (key === "volume") {
+            return this.plugin.settings.volume;
+        }
+
+        return undefined;
+    }
+
+    setControlValue(
+        key: string,
+        value: unknown
+    ): void | Promise<void> {
+
+        if (key === "youtubeUrl") {
+            this.plugin.settings.youtubeUrl =
+                String(value);
+
+            return this.plugin.saveSettings().then(() => {
+                this.plugin.updateYouTubeUrl();
+            });
+        }
+
+        if (key === "volume") {
+            const volume = Number(value);
+
+            this.plugin.settings.volume = volume;
+
+            return this.plugin.saveSettings();
+        }
+    }
+
+    // Fallback for Obsidian versions older than 1.13.0, which don't know
+    // about getSettingDefinitions() and render imperatively instead.
     display(): void {
 
         const { containerEl } =
@@ -424,7 +408,7 @@ class TubeNoteSettingTab
 
                 text
                     .setPlaceholder(
-                        "https://www.youtube.com/watch?v=..."
+                        "Paste a YouTube livestream link"
                     )
                     .setValue(
                         this.plugin.settings.youtubeUrl
@@ -438,8 +422,7 @@ class TubeNoteSettingTab
 
                         await this.plugin.saveSettings();
 
-                        await this.plugin
-                            .updateYouTubeUrl();
+                        this.plugin.updateYouTubeUrl();
                     }
                 );
             });
@@ -460,23 +443,13 @@ class TubeNoteSettingTab
                     .setValue(
                         this.plugin.settings.volume
                     )
-                    .setDynamicTooltip()
-
                     .onChange(
                         async (value) => {
 
                             this.plugin.settings.volume =
                                 value;
 
-                            await this.plugin
-                                .saveSettings();
-
-                            if (
-                                this.plugin.player
-                            ) {
-                                this.plugin.player
-                                    .setVolume(value);
-                            }
+                            await this.plugin.saveSettings();
                         }
                     );
             });
