@@ -1,9 +1,9 @@
 {
-  "id": "tubenote",
-  "name": "TubeNote",
-  "version": "1.0.0",
-  "minAppVersion": "1.0.0",
-  "description": "Adds a compact YouTube livestream controller above the vault name.",
-  "author": "Hugo Santos",
-  "isDesktopOnly": false
+	"id": "tubenote",
+	"name": "TubeNote",
+	"version": "1.0.1",
+	"minAppVersion": "1.0.0",
+	"description": "Adds a compact YouTube livestream controller above the vault name.",
+	"author": "Hugo Santos",
+	"isDesktopOnly": false
 }

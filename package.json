@@ -1,6 +1,6 @@
 {
   "name": "tubenote",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Adds a compact YouTube livestream controller above the vault name.",
   "main": "main.js",
   "type": "module",
