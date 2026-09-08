@@ -12,8 +12,8 @@ without leaving your notes.
 - The player persists across layout changes and reloads with your last
   saved settings.
 
-  [text](README.md) ![text](img/print_1.png)
-  [text](README.md) ![text](img/print_2.png)
+  ![text](img/print_1.png)
+  ![text](img/print_2.png)
 
 ## Usage
 
